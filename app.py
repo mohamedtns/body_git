@@ -10,12 +10,13 @@ import threading
 import time
 import warnings
 import joblib
+import os
 
 warnings.filterwarnings('ignore', category=UserWarning, module='google.protobuf')
 
 app = Flask(__name__)
 
-# Initializing Mediapipe Face Mesh and drawing utilities
+# Initializing Mediapipe Pose and drawing utilities
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
@@ -48,7 +49,7 @@ class VideoCaptureThread(threading.Thread):
                 if not ret:
                     break
 
-                # Retourner l'image horizontalement
+                # Flip the image horizontally
                 frame = cv2.flip(frame, 1)
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 results = pose.process(frame_rgb)
@@ -118,33 +119,43 @@ def start_capture():
 @app.route('/train_model', methods=['POST'])
 def train_model():
     global trained_model
-    # Convert data into DataFrame and train the model directly from data
-    columns = ['label'] + [f'{i}_{axis}' for i in range(33) for axis in ['x', 'y', 'z']]
-    df = pd.DataFrame(data, columns=columns)
+
+    # Check if data exists
+    csv_file_path = 'body_poses.csv'
+
+    if not os.path.exists(csv_file_path):
+        return jsonify({'message': 'Please capture the data first.', 'success': False})
+
+    # Read the CSV file
+    df = pd.read_csv(csv_file_path)
     X = df.drop('label', axis=1)
     y = df['label']
 
     # Divide the data into training and test sets (20% test, 80% training)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.8, random_state=42)
-    # Training the model
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+    # Training the model
     model = DecisionTreeClassifier()
     model.fit(X_train, y_train)
-
     trained_model = model
 
-    # Save the model as an .h5 file
-    joblib.dump(trained_model, 'modele_decision_tree.h5')
-    
     # Predicting and calculating accuracy
     y_pred = model.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
+
+    # Save the model as an .h5 file
+    joblib.dump(trained_model, 'modele_decision_tree.h5')
 
     return jsonify({'message': 'Model trained successfully.', 'success': True, 'accuracy': accuracy})
 
 @app.route('/start_prediction', methods=['POST'])
 def start_prediction():
-    global is_predicting
+    global is_predicting, trained_model
+
+    if not os.path.exists('modele_decision_tree.h5'):
+        return jsonify({'message': 'Train the model please.', 'success': False})
+
+    trained_model = joblib.load('modele_decision_tree.h5')
     is_predicting = True
     return jsonify({'message': 'Prediction started.', 'success': True})
 
